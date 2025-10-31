@@ -16,7 +16,7 @@ from sqlalchemy.orm import DeclarativeBase, sessionmaker, Mapped, mapped_column
 # ---------- Config ----------
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 ADMIN_TOKEN     = os.getenv("ADMIN_TOKEN", "")
-DB_URL          = "sqlite:///./news.db"
+DB_URL = os.getenv("DB_URL", "sqlite:///./news.db")
 
 FEEDS = {
     "NRK": "https://www.nrk.no/toppsaker.rss",
@@ -206,6 +206,20 @@ async def ingest_once():
 
 # ---------- API ----------
 app = FastAPI(title="Politisk Korrekt API")
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://editor.wix.com",
+        "https://www.wix.com",
+        "https://*.wixsite.com",
+        "https://yourdomain.no",  # replace this with your actual Wix domain when you have one
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 class ArticleOut(BaseModel):
     id: str
