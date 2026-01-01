@@ -3,8 +3,28 @@ uvicorn[standard]==0.30.6
 pydantic==2.9.2
 SQLAlchemy==2.0.36
 feedparser==6.0.11
-httpx==0.27.2
+httpx>=0.28.1,<1.0.0
 beautifulsoup4==4.12.3
 python-dotenv==1.0.1
 apscheduler==3.10.4
-openai
+google-genaiimport os
+from fastapi import FastAPI
+from google_genai import Client
+
+app = FastAPI()
+
+class Config:
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+    GEMINI_MODEL   = os.getenv("GEMINI_MODEL", "models/gemini-2.0-flash-001")
+
+_gemini_client = Client(api_key=Config.GEMINI_API_KEY)
+
+def _gemini_score_sync(prompt: str) -> str:
+    print("[GEMINI MODEL]", Config.GEMINI_MODEL)
+    resp = _gemini_client.models.generate_content(
+        model=Config.GEMINI_MODEL,
+        prompt=prompt,
+        temperature=0.7,
+        max_tokens=256
+    )
+    return resp.text

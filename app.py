@@ -13,8 +13,14 @@ from bs4 import BeautifulSoup
 from sqlalchemy import create_engine, String, Float, DateTime, Text, Boolean
 from sqlalchemy.orm import DeclarativeBase, sessionmaker, Mapped, mapped_column
 
+import asyncio
+import logging
+from google import genai
+from google.genai import types
+
 # ---------- Config ----------
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "models/gemini-2.0-flash-001")
 ADMIN_TOKEN     = os.getenv("ADMIN_TOKEN", "")
 DB_URL = os.getenv("DB_URL", "sqlite:///./news.db")
 
@@ -43,7 +49,6 @@ class Article(Base):
     summary:     Mapped[str]               = mapped_column(Text)
     published_at:Mapped[Optional[dt.datetime]] = mapped_column(DateTime, nullable=True)
     bias:        Mapped[Optional[float]]   = mapped_column(Float, nullable=True)       # -1..+1
-    reliability: Mapped[Optional[float]]   = mapped_column(Float, nullable=True)       # 0..1
     reason:      Mapped[Optional[str]]     = mapped_column(Text, nullable=True)
     faktisk_flag:Mapped[bool]              = mapped_column(Boolean, default=False)
     created_at:  Mapped[dt.datetime]       = mapped_column(DateTime, default=dt.datetime.utcnow)
@@ -81,70 +86,93 @@ def lexicon_bias(text: str) -> float:
     raw = (r - l) / (l + r)
     return max(-1.0, min(1.0, raw))
 
-def heuristic_reliability(title: str, summary: str) -> float:
-    base = 0.75
-    low_markers = ["kommentar","kronikk","debatt","mening"]
-    if any(k in (title.lower()+" "+summary.lower()) for k in low_markers):
-        base = 0.45
-    sens = sum(w in SENSATIONAL for w in re.findall(r"\w+", (title+" "+summary).lower()))
-    if sens: base -= 0.1
-    return max(0.0, min(1.0, base))
+def safe_float(value, default: float) -> float:
+    try:
+        if value is None:
+            return default
+        if isinstance(value, str):
+            value = value.strip().replace(",", ".")
+        return float(value)
+    except Exception:
+        return default
 
-# ---------- GPT Scoring ----------
-GPT_URL = "https://api.openai.com/v1/chat/completions"
+# ---------- Gemini Scoring ----------
+# Uses Google AI Studio / Gemini API key from env: GEMINI_API_KEY
+# Model is controlled by GEMINI_MODEL (default: models/gemini-2.0-flash-001)
 
-async def gpt_score(title: str, summary: str) -> dict:
-    if not OPENAI_API_KEY:
-        return {
-            "bias": lexicon_bias(f"{title}. {summary}"),
-            "reliability": heuristic_reliability(title, summary),
-            "reason": "Lexicon fallback (no OPENAI_API_KEY)."
-        }
+_gemini_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY.strip() else None
 
+def _gemini_score_sync(title: str, summary: str) -> dict:
+    """Synchronous Gemini call (wrapped by an async function below)."""
     prompt = f"""
-Du er en nøytral norsk medieanalytiker. Vurder artikkelen:
+Du er en nøytral norsk medieanalytiker. Vurder artikkelen basert på tittel og ingress/utdrag.
+
 Tittel: {title}
 Ingress/utdrag: {summary}
+Returner KUN gyldig JSON med feltene:
+- bias: tall mellom -1 (klart venstre) og +1 (klart høyre), 0 = nøytral
+- reason: 1–2 korte setninger som forklarer vurderingen
 
-Gi meg et JSON-objekt med:
-- bias: tall mellom -1 (venstre) og +1 (høyre)
-- reliability: tall mellom 0 og 1
-- reason: 1–2 setninger (kort)
-
-Svar kun med JSON.
+Bruk punktum som desimaltegn i JSON (f.eks. 0.25, ikke 0,25).
+Ingen annen tekst enn JSON.
 """.strip()
 
-    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type":"application/json"}
-    body = {
-        "model": "gpt-4o-mini",
-        "messages": [
-            {"role":"system","content":"You output valid JSON only."},
-            {"role":"user","content": prompt}
-        ],
-        "temperature": 0.2
-    }
-    async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.post(GPT_URL, headers=headers, json=body)
-        r.raise_for_status()
-        data = r.json()
-        txt = data["choices"][0]["message"]["content"]
+    print("[GEMINI MODEL]", GEMINI_MODEL)
+    resp = _gemini_client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            temperature=0.2,
+        ),
+    )
+    print("[GEMINI RAW]", (resp.text or "")[:500])
 
-    try:
-        return json.loads(txt)
-    except Exception:
+    text = (resp.text or "").strip()
+
+    # Most of the time response_mime_type makes this valid JSON.
+    # Fallback: if any extra text sneaks in, extract the first JSON object.
+    m = re.search(r"\{.*\}", text, flags=re.DOTALL)
+    if m:
+        text = m.group(0)
+
+    data = json.loads(text)
+
+    data["bias"] = safe_float(data.get("bias"), 0.0)
+    data["reason"] = str(data.get("reason") or "").strip()
+    if data["reason"]:
+        data["reason"] = "Gemini: " + data["reason"]
+    else:
+        data["reason"] = "Gemini: (no reason returned)"
+    return data
+
+
+async def score_article(title: str, summary: str) -> dict:
+    """Return {bias, reason}. Falls back to lexicon if Gemini key missing or parsing fails."""
+    if not GEMINI_API_KEY or _gemini_client is None:
         return {
             "bias": lexicon_bias(f"{title}. {summary}"),
-            "reliability": heuristic_reliability(title, summary),
-            "reason": "Fallback to lexicon (JSON parse)."
+            "reason": "Lexicon (no GEMINI_API_KEY).",
+        }
+
+    try:
+        # Run the blocking SDK call in a background thread
+        return await asyncio.to_thread(_gemini_score_sync, title, summary)
+    except Exception as e:
+        print("[GEMINI ERROR]", repr(e))
+        # Optional: also print raw response text by catching inside _gemini_score_sync (see below)
+        return {
+            "bias": lexicon_bias(f"{title}. {summary}"),
+            "reason": "Lexicon (Gemini error or invalid JSON).",
         }
 
 # ---------- Ingestion ----------
 async def fetch_articles() -> list[dict]:
     out = []
-    headers = {
+    req_headers = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
     }
-    async with httpx.AsyncClient(timeout=20, headers=headers, follow_redirects=True) as client:
+    async with httpx.AsyncClient(timeout=20, headers=req_headers, follow_redirects=True) as client:
         for outlet, url in FEEDS.items():
             try:
                 r = await client.get(url)
@@ -184,7 +212,7 @@ async def ingest_once():
             pk = sha1(f"{r['outlet']}|{r['url']}")
             if db.get(Article, pk): 
                 continue
-            scores = await gpt_score(r["title"], r["summary"])
+            scores = await score_article(r["title"], r["summary"])
             art = Article(
                 id=pk,
                 outlet=r["outlet"],
@@ -192,8 +220,7 @@ async def ingest_once():
                 title=r["title"],
                 summary=r["summary"],
                 published_at=r["published_at"],
-                bias=float(scores.get("bias", 0)),
-                reliability=float(scores.get("reliability", 0.6)),
+                bias=safe_float(scores.get("bias"), 0.0),
                 reason=scores.get("reason",""),
                 faktisk_flag=False
             )
@@ -211,9 +238,9 @@ from fastapi.middleware.cors import CORSMiddleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://editor.wix.com",
-        "https://www.wix.com",
-        "https://*.wixsite.com",
+        "https://editor.wix.com",  #Wix editor
+        "https://www.wix.com",     #Wix preview domains
+        "https://*.wixsite.com",    #my free wix domain
         "https://yourdomain.no",  # replace this with your actual Wix domain when you have one
     ],
     allow_credentials=True,
@@ -229,9 +256,22 @@ class ArticleOut(BaseModel):
     summary: str
     published_at: dt.datetime
     bias: float
-    reliability: float
     reason: str
     faktisk_flag: bool | None = False
+
+class AnalyzeIn(BaseModel):
+    title: str
+    summary: str = ""
+    url: str | None = None
+    outlet: str | None = None
+
+class AnalyzeOut(BaseModel):
+    title: str
+    summary: str
+    url: str | None = None
+    outlet: str | None = None
+    bias: float
+    reason: str
 
 def require_admin(x_admin_token: str = Header(None)):
     if x_admin_token != ADMIN_TOKEN:
@@ -250,8 +290,8 @@ def list_articles(limit: int = 30, outlet: Optional[str] = None, order: str = "d
         return [ArticleOut(
             id=r.id, outlet=r.outlet, url=r.url, title=r.title,
             summary=r.summary, published_at=r.published_at,
-            bias=r.bias or 0.0, reliability=r.reliability or 0.6,
-            reason=r.reason or "", faktisch_flag=r.faktisk_flag
+            bias=r.bias or 0.0,
+            reason=r.reason or "", faktisk_flag=r.faktisk_flag
         ) for r in rows]
     finally:
         db.close()
@@ -260,6 +300,18 @@ def list_articles(limit: int = 30, outlet: Optional[str] = None, order: str = "d
 async def run_ingest(admin_ok: bool = Depends(require_admin)):
     n = await ingest_once()
     return {"ingested": n}
+
+@app.post("/api/analyze", response_model=AnalyzeOut)
+async def analyze_article(payload: AnalyzeIn, admin_ok: bool = Depends(require_admin)):
+    scores = await score_article(payload.title, payload.summary or "")
+    return AnalyzeOut(
+        title=payload.title,
+        summary=payload.summary or "",
+        url=payload.url,
+        outlet=payload.outlet,
+        bias=safe_float(scores.get("bias"), 0.0),
+        reason=scores.get("reason", ""),
+    )
 
 # ---------- Dev scheduler (optional) ----------
 if os.getenv("ENV","dev") == "dev":
