@@ -201,12 +201,9 @@ def group_into_stories(articles: list) -> list:
     for group_articles in groups.values():
         outlets = {a.outlet for a in group_articles}
 
-        # Require at least 2 different outlets for a story
-        if len(outlets) < 2:
-            continue
-
         all_outlets = set(FEEDS.keys())
-        blindspot  = len(outlets) < len(all_outlets) / 2
+        # Blindsone if only 1 outlet covers the story, or fewer than half cover it
+        blindspot = len(outlets) < len(all_outlets) / 2
 
         # Count unique outlets per bias category (not articles)
         # Pick the most extreme article per outlet to represent that outlet
