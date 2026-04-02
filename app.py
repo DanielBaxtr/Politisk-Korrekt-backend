@@ -165,7 +165,7 @@ STOP_WORDS = set(
 )
 
 def title_keywords(title: str) -> set:
-    words = re.findall(r"[a-zæøåA-ZÆØÅ]{4,}", title)
+    words = re.findall(r"[a-zæøåA-ZÆØÅ]{3,}", title)
     return {w.lower() for w in words if w.lower() not in STOP_WORDS}
 
 def group_into_stories(articles: list) -> list:
@@ -188,9 +188,11 @@ def group_into_stories(articles: list) -> list:
 
     for i in range(n):
         for j in range(i + 1, n):
-            if abs((dates[i] - dates[j]).total_seconds()) > 4 * 86400:
+            if abs((dates[i] - dates[j]).total_seconds()) > 7 * 86400:
                 continue
-            if len(keywords[i] & keywords[j]) >= 2:
+            shared = keywords[i] & keywords[j]
+            # 1 keyword is enough if it's a long/specific word (6+ chars)
+            if len(shared) >= 2 or any(len(w) >= 6 for w in shared):
                 union(i, j)
 
     groups: dict[int, list] = defaultdict(list)
@@ -361,7 +363,7 @@ def list_articles(limit: int = 50, outlet: Optional[str] = None):
 def list_stories(limit: int = 20):
     db = SessionLocal()
     try:
-        articles = db.query(Article).order_by(Article.published_at.desc()).limit(200).all()
+        articles = db.query(Article).order_by(Article.published_at.desc()).limit(500).all()
         stories  = group_into_stories(articles)
         return stories[:limit]
     finally:
@@ -371,7 +373,7 @@ def list_stories(limit: int = 20):
 def get_story(story_id: str):
     db = SessionLocal()
     try:
-        articles = db.query(Article).order_by(Article.published_at.desc()).limit(200).all()
+        articles = db.query(Article).order_by(Article.published_at.desc()).limit(500).all()
         stories  = group_into_stories(articles)
         story    = next((s for s in stories if s["id"] == story_id), None)
         if not story:
