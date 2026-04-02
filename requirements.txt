@@ -8,3 +8,4 @@ beautifulsoup4==4.12.3
 python-dotenv==1.0.1
 apscheduler==3.10.4
 google-genai
+psycopg2-binary
