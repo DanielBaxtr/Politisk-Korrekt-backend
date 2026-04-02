@@ -288,6 +288,7 @@ app = FastAPI(title="Politisk Korrekt API")
 allowed_origins = [
     "http://localhost:3000",
     "http://localhost:3001",
+    "https://politisk-korrekt.vercel.app",
 ]
 if FRONTEND_URL:
     allowed_origins.append(FRONTEND_URL)
