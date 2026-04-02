@@ -165,7 +165,7 @@ STOP_WORDS = set(
 )
 
 def title_keywords(title: str) -> set:
-    words = re.findall(r"[a-zæøåA-ZÆØÅ]{3,}", title)
+    words = re.findall(r"[a-zæøåA-ZÆØÅ]{5,}", title)
     return {w.lower() for w in words if w.lower() not in STOP_WORDS}
 
 def group_into_stories(articles: list) -> list:
@@ -191,8 +191,8 @@ def group_into_stories(articles: list) -> list:
             if abs((dates[i] - dates[j]).total_seconds()) > 7 * 86400:
                 continue
             shared = keywords[i] & keywords[j]
-            # 1 keyword is enough if it's a long/specific word (6+ chars)
-            if len(shared) >= 2 or any(len(w) >= 6 for w in shared):
+            # Need 2+ matching keywords, or 1 very specific word (8+ chars)
+            if len(shared) >= 2 or any(len(w) >= 8 for w in shared):
                 union(i, j)
 
     groups: dict[int, list] = defaultdict(list)
