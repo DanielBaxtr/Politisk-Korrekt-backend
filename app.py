@@ -266,12 +266,17 @@ async def fetch_articles() -> list[dict]:
             seen.add(r["url"]); dedup.append(r)
     return dedup
 
-async def ingest_once():
+async def ingest_once(limit_per_outlet: int = 15):
+    """Ingest up to limit_per_outlet new articles per outlet.
+    Run multiple times to gradually fill the database across all outlets."""
     rows = await fetch_articles()
     db = SessionLocal()
     new_count = 0
+    outlet_counts: dict[str, int] = defaultdict(int)
     try:
         for r in rows:
+            if outlet_counts[r["outlet"]] >= limit_per_outlet:
+                continue
             if db.get(Article, r["id"]): continue
             scores = await score_article(r["title"], r["summary"])
             db.add(Article(
@@ -281,9 +286,10 @@ async def ingest_once():
                 bias=scores["bias"], reliability=scores["reliability"],
                 reason=scores.get("reason", ""), faktisk_flag=False,
             ))
-            db.commit()  # commit each article immediately to avoid lock
+            db.commit()
             new_count += 1
-            await asyncio.sleep(2)  # gemini-2.5-flash with billing supports 30 req/min
+            outlet_counts[r["outlet"]] += 1
+            await asyncio.sleep(2)
         return new_count
     finally:
         db.close()
@@ -375,8 +381,8 @@ def get_story(story_id: str):
         db.close()
 
 @app.post("/jobs/ingest")
-async def run_ingest(_: None = Depends(require_admin)):
-    n = await ingest_once()
+async def run_ingest(limit_per_outlet: int = 15, _: None = Depends(require_admin)):
+    n = await ingest_once(limit_per_outlet=limit_per_outlet)
     return {"ingested": n}
 
 @app.get("/health")
@@ -387,5 +393,5 @@ def health():
 if os.getenv("ENV", "dev") == "dev":
     from apscheduler.schedulers.background import BackgroundScheduler
     sched = BackgroundScheduler()
-    sched.add_job(lambda: asyncio.run(ingest_once()), "interval", weeks=1)
+    sched.add_job(lambda: asyncio.run(ingest_once()), "interval", hours=12)
     sched.start()
