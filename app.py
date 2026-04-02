@@ -31,7 +31,7 @@ FEEDS = {
     "NRK":          "https://www.nrk.no/toppsaker.rss",
     "VG":           "https://www.vg.no/rss/feed/?limit=50",
     "Dagbladet":    "https://www.dagbladet.no/rss/",
-    "Nettavisen":   "https://www.nettavisen.no/rss",
+    "Aftenposten":  "https://www.aftenposten.no/rss",
     "Document":     "https://www.document.no/feed/",
     "Resett":       "https://resett.no/feed/",
     "FilterNyheter":"https://filternyheter.no/feed/",
@@ -107,9 +107,9 @@ I norsk politisk kontekst betyr:
 - Høyre (+1): Høyre, FrP-perspektiv. Fokus på skattekutt, privatisering, innvandringskritikk, næringsliv, forsvar og oljepolitikk.
 
 Typisk profil for norske medier (bruk som kontekst, ikke fasit):
-- NRK, Filter Nyheter: Tendens senter/senter-venstre
+- NRK, Aftenposten, Filter Nyheter: Tendens senter/senter-venstre
 - VG, Dagbladet: Senter med tabloid-vinkling
-- Nettavisen, Subjekt: Senter/senter-høyre
+- Subjekt: Senter/senter-høyre
 - Document, Resett: Høyre/nasjonalistisk
 
 Vurder artikkelen basert på tittel og ingress. Se på språkbruk, ordvalg, hvilke perspektiver som fremheves og hvem som siteres.
