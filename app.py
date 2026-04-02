@@ -283,7 +283,7 @@ async def ingest_once():
             ))
             db.commit()  # commit each article immediately to avoid lock
             new_count += 1
-            await asyncio.sleep(4)  # stay under Gemini free tier rate limit (15 req/min)
+            await asyncio.sleep(2)  # gemini-2.5-flash with billing supports 30 req/min
         return new_count
     finally:
         db.close()
