@@ -99,30 +99,32 @@ def lexicon_bias(text: str) -> float:
 _gemini_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY.strip() else None
 
 def _gemini_score_sync(title: str, summary: str) -> dict:
-    prompt = f"""Du er en nøytral norsk medieanalytiker.
+    prompt = f"""Du er en ekspert norsk medieanalytiker. Analyser artikkelen langs tre dimensjoner:
 
-I norsk politisk kontekst betyr:
-- Venstre (-1): SV, Rødt, MDG-perspektiv. Fokus på klima, velferd, fagforeninger, offentlig sektor, skattlegging av rike, kritisk til olje og næringsliv.
-- Senter (0): AP, SP, Venstre-perspektiv. Balansert og saklig dekning uten tydelig politisk slagside.
-- Høyre (+1): Høyre, FrP-perspektiv. Fokus på skattekutt, privatisering, innvandringskritikk, næringsliv, forsvar og oljepolitikk.
+1. INKLUDERING (30%): Hvem siteres? Hvilke perspektiver og fakta fremheves?
+2. EKSKLUDERING (40% — viktigst): Hva mangler? Hvilken kontekst er utelatt? Hvilke motargumenter mangler? Bias vises oftest i det som IKKE er der.
+3. FRAMING (30%): Brukes ladede ord? ("kutt" vs "effektivisering", "flyktninger" vs "innvandrere"). Hvilken vinkling har overskriften?
 
-Typisk profil for norske medier (bruk som kontekst, ikke fasit):
-- NRK, Aftenposten, Filter Nyheter: Tendens senter/senter-venstre
-- VG, Dagbladet: Senter med tabloid-vinkling
+Norsk politisk skala:
+- Venstre (-1): SV/Rødt/MDG-perspektiv — omfordeling, velferd, fagforeninger, klima, offentlig sektor, kritisk til næringsliv og olje
+- Senter (0): Ap/SP/Venstre-perspektiv — balansert, saklig, ingen tydelig slagside
+- Høyre (+1): Høyre/FrP-perspektiv — skattekutt, privatisering, næringsliv, individuell frihet, innvandringskritikk, forsvar
+
+Typisk medieprofil:
+- NRK, Aftenposten, Filter Nyheter: Senter/senter-venstre
+- VG, Dagbladet: Senter med tabloidvinkling
 - Subjekt: Senter/senter-høyre
 - Document, Resett: Høyre/nasjonalistisk
-
-Vurder artikkelen basert på tittel og ingress. Se på språkbruk, ordvalg, hvilke perspektiver som fremheves og hvem som siteres.
 
 Tittel: {title}
 Ingress: {summary}
 
-Returner KUN gyldig JSON med disse feltene:
-- bias: tall mellom -1 (klart venstrekant) og +1 (klart høyrekant), 0 = nøytral
-- reliability: tall mellom 0 (svært upålitelig) og 1 (svært pålitelig)
-- reason: 1-2 korte setninger på norsk som forklarer vurderingen
+Returner KUN gyldig JSON:
+- bias: -1 til +1
+- reliability: 0 til 1
+- reason: 1-2 setninger på norsk. Forklar konkret hva som inkluderes, hva som mangler, og hvilken framing som brukes — ikke bare "artikkelen er nøytral".
 
-Bruk punktum som desimaltegn (f.eks. 0.25). Ingen annen tekst enn JSON."""
+Bruk punktum som desimaltegn. Ingen annen tekst enn JSON."""
 
     resp = _gemini_client.models.generate_content(
         model=GEMINI_MODEL,
