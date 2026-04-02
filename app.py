@@ -199,17 +199,26 @@ def group_into_stories(articles: list) -> list:
 
     stories = []
     for group_articles in groups.values():
-        if len(group_articles) < 2:
+        outlets = {a.outlet for a in group_articles}
+
+        # Require at least 2 different outlets for a story
+        if len(outlets) < 2:
             continue
 
-        outlets    = {a.outlet for a in group_articles}
         all_outlets = set(FEEDS.keys())
         blindspot  = len(outlets) < len(all_outlets) / 2
 
-        # Count articles per category to determine bias distribution
-        n = len(group_articles)
-        left_count   = sum(1 for a in group_articles if (a.bias or 0.0) < -0.33)
-        right_count  = sum(1 for a in group_articles if (a.bias or 0.0) > 0.33)
+        # Count unique outlets per bias category (not articles)
+        # Pick the most extreme article per outlet to represent that outlet
+        outlet_biases = {}
+        for a in group_articles:
+            existing = outlet_biases.get(a.outlet)
+            if existing is None or abs(a.bias or 0.0) > abs(existing):
+                outlet_biases[a.outlet] = a.bias or 0.0
+
+        n = len(outlet_biases)
+        left_count   = sum(1 for b in outlet_biases.values() if b < -0.33)
+        right_count  = sum(1 for b in outlet_biases.values() if b > 0.33)
         center_count = n - left_count - right_count
         avg_left   = round(left_count / n, 2)
         avg_right  = round(right_count / n, 2)
