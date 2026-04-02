@@ -54,10 +54,19 @@ class Article(Base):
     bias:         Mapped[Optional[float]]       = mapped_column(Float, nullable=True)
     reliability:  Mapped[Optional[float]]       = mapped_column(Float, nullable=True)
     reason:       Mapped[Optional[str]]         = mapped_column(Text, nullable=True)
+    topic:        Mapped[Optional[str]]         = mapped_column(String(128), nullable=True)
     faktisk_flag: Mapped[bool]                  = mapped_column(Boolean, default=False)
     created_at:   Mapped[dt.datetime]           = mapped_column(DateTime, default=dt.datetime.utcnow)
 
 Base.metadata.create_all(engine)
+
+# Add topic column to existing databases (safe no-op if already exists)
+from sqlalchemy import text as _sql_text
+try:
+    with engine.begin() as _conn:
+        _conn.execute(_sql_text("ALTER TABLE articles ADD COLUMN topic VARCHAR(128)"))
+except Exception:
+    pass  # column already exists
 
 # ---------- Helpers ----------
 def clean_html(html: str) -> str:
@@ -123,6 +132,7 @@ Returner KUN gyldig JSON:
 - bias: -1 til +1
 - reliability: 0 til 1
 - reason: 1-2 setninger på norsk. Forklar konkret hva som inkluderes, hva som mangler, og hvilken framing som brukes — ikke bare "artikkelen er nøytral".
+- topic: 1-3 ord på norsk, bindestreker, som beskriver HVILKEN SAK artikkelen handler om (ikke tema, men konkret sak). Bruk samme topic for artikler om samme hendelse. Eksempler: "trump-toll", "iran-atomvåpen", "norsk-skolereform", "israel-gaza", "statsbudsjettet-2025", "støre-stortingsvalg". Skriv null (JSON null) for upolitiske saker som sport, underholdning, ulykker.
 
 Bruk punktum som desimaltegn. Ingen annen tekst enn JSON."""
 
@@ -141,6 +151,12 @@ Bruk punktum som desimaltegn. Ingen annen tekst enn JSON."""
     data["bias"]        = max(-1.0, min(1.0, safe_float(data.get("bias"), 0.0)))
     data["reliability"] = max(0.0,  min(1.0, safe_float(data.get("reliability"), 0.5)))
     data["reason"]      = str(data.get("reason") or "").strip()
+    raw_topic = data.get("topic")
+    if raw_topic and isinstance(raw_topic, str):
+        # normalize: lowercase, strip, replace spaces with hyphens
+        data["topic"] = re.sub(r"[^a-zæøå0-9\-]", "", raw_topic.lower().strip().replace(" ", "-"))
+    else:
+        data["topic"] = None
     return data
 
 async def score_article(title: str, summary: str) -> dict:
@@ -170,6 +186,12 @@ def title_keywords(title: str) -> set:
     words = re.findall(r"[a-zæøåA-ZÆØÅ]{5,}", title)
     return {w.lower() for w in words if w.lower() not in STOP_WORDS}
 
+def topics_overlap(t1: Optional[str], t2: Optional[str]) -> bool:
+    """True if topics share at least one word (e.g. 'trump-toll' and 'trump-handel')."""
+    if not t1 or not t2:
+        return False
+    return bool(set(t1.split("-")) & set(t2.split("-")))
+
 def group_into_stories(articles: list) -> list:
     n = len(articles)
     if n == 0: return []
@@ -187,14 +209,24 @@ def group_into_stories(articles: list) -> list:
 
     keywords = [title_keywords(a.title) for a in articles]
     dates    = [a.published_at or dt.datetime.utcnow() for a in articles]
+    topics   = [getattr(a, "topic", None) or "" for a in articles]
 
     for i in range(n):
         for j in range(i + 1, n):
             if abs((dates[i] - dates[j]).total_seconds()) > 7 * 86400:
                 continue
-            shared = keywords[i] & keywords[j]
-            # Need 2+ matching keywords, or 1 very specific word (8+ chars)
-            if len(shared) >= 2 or any(len(w) >= 8 for w in shared):
+            ti, tj = topics[i], topics[j]
+            # 1. Exact topic match → always group
+            if ti and tj and ti == tj:
+                union(i, j)
+                continue
+            # 2. Overlapping topic words + at least 1 keyword match → group
+            shared_kw = keywords[i] & keywords[j]
+            if topics_overlap(ti, tj) and shared_kw:
+                union(i, j)
+                continue
+            # 3. Pure keyword fallback (no topic info or no overlap)
+            if len(shared_kw) >= 2 or any(len(w) >= 8 for w in shared_kw):
                 union(i, j)
 
     groups: dict[int, list] = defaultdict(list)
@@ -288,7 +320,9 @@ async def ingest_once(limit_per_outlet: int = 15):
                 title=r["title"], summary=r["summary"],
                 published_at=r["published_at"],
                 bias=scores["bias"], reliability=scores["reliability"],
-                reason=scores.get("reason", ""), faktisk_flag=False,
+                reason=scores.get("reason", ""),
+                topic=scores.get("topic"),
+                faktisk_flag=False,
             ))
             db.commit()
             new_count += 1
@@ -330,6 +364,7 @@ class ArticleOut(BaseModel):
     bias:         float
     reliability:  float
     reason:       str
+    topic:        Optional[str] = None
 
 class StoryOut(BaseModel):
     id:               str
@@ -356,7 +391,7 @@ def list_articles(limit: int = 50, outlet: Optional[str] = None):
             id=r.id, outlet=r.outlet, url=r.url, title=r.title,
             summary=r.summary, published_at=r.published_at,
             bias=r.bias or 0.0, reliability=r.reliability or 0.5,
-            reason=r.reason or "",
+            reason=r.reason or "", topic=r.topic,
         ) for r in q.limit(limit).all()]
     finally:
         db.close()
