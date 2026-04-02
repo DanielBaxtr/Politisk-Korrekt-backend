@@ -289,6 +289,8 @@ allowed_origins = [
     "http://localhost:3000",
     "http://localhost:3001",
     "https://politisk-korrekt.vercel.app",
+    "https://politisk-korrekt-git-main-danielbaxtrs-projects.vercel.app",
+    "https://politisk-korrekt-eyqxpfrn2-danielbaxtrs-projects.vercel.app",
 ]
 if FRONTEND_URL:
     allowed_origins.append(FRONTEND_URL)
