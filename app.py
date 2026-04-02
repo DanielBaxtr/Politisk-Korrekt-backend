@@ -424,6 +424,24 @@ async def run_ingest(limit_per_outlet: int = 15, _: None = Depends(require_admin
     n = await ingest_once(limit_per_outlet=limit_per_outlet)
     return {"ingested": n}
 
+@app.post("/jobs/retopic")
+async def run_retopic(_: None = Depends(require_admin)):
+    """Back-fill topic field on existing articles that have none."""
+    db = SessionLocal()
+    try:
+        rows = db.query(Article).filter(Article.topic == None).all()  # noqa: E711
+        updated = 0
+        for article in rows:
+            scores = await score_article(article.title, article.summary or "")
+            if scores.get("topic") is not None:
+                article.topic = scores["topic"]
+                db.commit()
+                updated += 1
+            await asyncio.sleep(2)
+        return {"updated": updated, "total_without_topic": len(rows)}
+    finally:
+        db.close()
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
